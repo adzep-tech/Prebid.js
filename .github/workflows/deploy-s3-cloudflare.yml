@@ -1,0 +1,57 @@
+name: Deploy prebid.js to S3 and purge Cloudflare cache
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  S3_BUCKET: autozep.adzep.io
+  S3_KEY: v4/prebid.js
+  PURGE_URL: https://autozep.adzep.io/v4/prebid.js
+
+jobs:
+  deploy:
+    name: Build and deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup node
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: '.nvmrc'
+
+      - name: Install dependencies
+        uses: ./.github/actions/npm-ci
+
+      - name: Build (modules.json)
+        run: npx gulp build --modules=modules.json
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::121235204801:role/github-actions-prebid-deploy
+          aws-region: us-east-1
+
+      - name: Upload prebid.js to S3
+        run: |
+          aws s3 cp build/dist/prebid.js "s3://${S3_BUCKET}/${S3_KEY}"
+
+      - name: Purge Cloudflare cache
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+        run: |
+          curl --fail-with-body -sS -X POST \
+            "https://api.cloudflare.com/client/v4/zones/${CLOUDFLARE_ZONE_ID}/purge_cache" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data "{\"files\":[\"${PURGE_URL}\"]}"
